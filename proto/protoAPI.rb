@@ -6,10 +6,15 @@ require 'sinatra/reloader'
 require 'mongo'
 require 'open-uri'
 require 'date'
+require 'ai4r'
+include Ai4r::Data
+include Ai4r::Clusterers
 
 include Mongo
 
 @@CHARMSTORE_URL = "http://api.jujugui.org/charmstore/v4"
+@@centroids = []
+@@labels = []
 
 set :bind, '0.0.0.0'
 
@@ -233,7 +238,7 @@ get "/store/changes/aggregate" do
 	if doc.empty?
 		now = Time.now.utc		
 		# You've got 7 days!
-		history = 1
+		history = 7
 		last_time = Time.new(now.year, now.month, now.day - history, now.hour, now.min, now.sec)
 	else
 		pp doc
@@ -268,6 +273,106 @@ get "/store/changes/aggregate" do
 end
 
 # ***************************************************
-# * clusters
+# * clusters & centroids
 # ***************************************************
 
+# Create $num clusters for existing notification subscriptions
+# in a highly inefficient way :)
+get "/store/centroids/:num" do
+	content_type :json
+	# for all users
+	users = userColl.find().to_a
+	dataset = []
+	users.each {
+		|user|
+		# create vectors of subscriptions
+		usr = user["_id"]
+		subs = subsColl.find("user" => usr).to_a
+		dataset << subs.map { |x| x["charm_id"] }
+	}
+	pp dataset
+
+	# create sparse matrix
+	@@labels = []
+	dataset.each {
+		|set|
+		set.each { |keyword| @@labels << keyword if not @@labels.include? keyword }
+	}
+
+	normalized = []
+	dataset.each {
+		|set|
+		pos = 0
+		data = []
+		@@labels.size.times { data << 0 }
+		@@labels.each {
+			|label|
+			data[pos] = 1 if set.include?(label)
+			pos += 1
+		}
+		normalized << data
+	}
+	pp normalized
+
+	data_set = DataSet.new(:data_items => normalized, :data_labels => @@labels)
+	clusterer = KMeans.new.build(data_set, params[:num].to_i)
+
+	clusterer.clusters.each_with_index {
+		|cluster, index| 
+		puts "Group #{index+1}"
+		p cluster.data_items
+	}
+
+	@@centroids = clusterer.centroids
+	@@centroids.each_with_index {
+		|centroid, index| 
+		puts "Group #{index+1}"
+		p centroid
+	}
+
+	# then use those to cluster them
+	status 200
+	return @@centroids.to_json
+end
+
+# ***************************************************
+# * recommendations
+# ***************************************************
+
+# curl -X POST -H "Content-Type: application/json" -d '{"charm_ids": ["keystone"]}' http://localhost:4567/store/recommend
+post "/store/recommend" do
+	content_type :json
+
+	data = JSON.parse(request.body.read)
+	ids = data["charm_ids"]
+	pp ids
+	normalized = []
+	pp @@labels
+	@@labels.each { |label| ids.include?(label) ? normalized << 1 : normalized << 0 }
+	pp normalized
+
+	# Calculate distance from centroids
+	min_dist = nil
+	closest_cenroid = nil
+	@@centroids.each {
+		|centroid|
+		dist = KMeans.new.distance(centroid, normalized)
+		if min_dist.nil?
+			min_dist = dist
+			closest_cenroid = centroid
+		end
+		if dist < min_dist 
+			min_dist = dist
+			closest_cenroid = centroid
+		end
+	}
+	pp closest_cenroid
+	# XXX Weights might need to be normalized
+	result = Hash[@@labels.zip(closest_cenroid)]
+	result = result.sort_by {|_key, value| value}.reverse
+	result = result.select { |x| x[1] >= 0.25 && !ids.include?(x[0]) }
+	pp result
+
+	status 200
+	return result.to_json
+end
