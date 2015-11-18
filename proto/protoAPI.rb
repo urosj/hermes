@@ -65,7 +65,7 @@ put "/u/:user" do
 		id = userColl.insert(data)
 	end
 
-	status 200
+	status 201
 end
 
 get "/u/:user" do 
@@ -73,7 +73,7 @@ get "/u/:user" do
 	res = userColl.find("_id" => params[:user]).to_a
 	if res.empty? 
 		status 404
-		return res.to_json
+		return
 	end
 	status 200
 	return res.to_json
@@ -86,9 +86,76 @@ end
 
 get "/u/:user/store/subs" do 
 	content_type :json
+
+	res = userColl.find("_id" => params[:user]).to_a
+	if res.empty? 
+		status 404
+		body '{"error": "user not found"}'
+		return
+	end
+
+	res = subsColl.find("user" => params[:user]).to_a.to_json
 	status 200
-	body ''
+	return res
 end
+
+# curl -X POST -H "Content-Type: application/json" -d '{"charm_id": "cs:wordpress"}' http://localhost:4567/u/john-doe/store/subs
+post "/u/:user/store/subs" do 
+	content_type :json
+	data = JSON.parse(request.body.read)
+	pp data
+	charm_id = data["charm_id"]
+
+	res = userColl.find("_id" => params[:user]).to_a
+	if res.empty? 
+		status 404
+		body '{"error": "user not found"}'
+		return
+	end
+
+	res = subsColl.find("user" => params[:user], "charm_id" => charm_id).to_a
+	if not res.empty?
+		status 200
+		return
+	end
+
+	data = {}
+	data["user"] = params[:user]
+	data["charm_id"] = charm_id 
+	id = subsColl.insert(data)
+	status 201
+end 
+
+# curl -X DELETE -H "Content-Type: application/json" -d '{"charm_id": "cs:wordpress"}' http://localhost:4567/u/john-doe/store/subs
+delete "/u/:user/store/subs" do 
+	content_type :json
+	data = JSON.parse(request.body.read)
+	pp data
+	charm_id = data["charm_id"]
+
+	res = userColl.find("_id" => params[:user]).to_a
+	if res.empty? 
+		status 404
+		body '{"error": "user not found"}'
+		return
+	end
+
+	res = subsColl.find("user" => params[:user], "charm_id" => charm_id).to_a
+	if res.empty?
+		status 404
+		body '{"error": "notification subscription to store not found"}'
+		return
+	end
+
+	subsColl.remove( {"_id" => res[0]["_id"]} )
+	status 200
+end	
+
+# ***************************************************
+# * user notifications
+# ***************************************************
+
+
 
 # ***************************************************
 # * store changes 
