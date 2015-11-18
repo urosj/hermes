@@ -161,6 +161,26 @@ end
 # * user notifications
 # ***************************************************
 
+def notifFiler(notifications, fileters)
+	res = []
+	added = {}
+	fileters.each {
+		|filter|
+		notifications.each {
+			|notice|
+			pp notice
+			if notice["charm_id"].include?(filter["charm_id"])
+				if not added.has_key?(notice["charm_id"])
+					notice.delete("_id")
+					res << notice
+					added[notice["charm_id"]] = ""
+				end
+			end
+		}
+	}
+	return res
+end
+
 get "/u/:user/store/notifications" do
 	udoc = userColl.find("_id" => params[:user]).to_a
 	if udoc.empty? 
@@ -168,6 +188,23 @@ get "/u/:user/store/notifications" do
 		body '{"error": "user not found"}'
 		return
 	end
+	udoc = udoc[0]
+
+	last_access = udoc["last_store_access"]
+	last_access = Time.new(2015) if last_access.nil?
+
+	docs = cscColl.find("publish_time" => {'$gte' => last_access.to_i}).to_a
+	
+	udoc["last_store_access"] = Time.now.utc
+	userColl.update({"_id" => udoc["_id"]}, udoc)
+
+	#get user subscriptions
+	subs = subsColl.find("user" => params[:user]).to_a
+	# filter the docs, so that they match the ones the user is subscribed to
+	notifications = notifFiler(docs, subs)
+
+	status 200
+	return notifications.to_json
 end
 
 # ***************************************************
@@ -182,7 +219,7 @@ def filterPublished(data, last_access)
 		id = ht["Id"]
 		stime = ht["PublishTime"]
 		ptime = Time.parse(stime)
-		filtered << {"charm_id" => id, "publish_time" => ptime} if ptime.to_i >= last
+		filtered << {"charm_id" => id, "publish_time" => ptime.to_i} if ptime.to_i >= last
 	}
 	return filtered
 end
@@ -201,7 +238,7 @@ get "/store/changes/aggregate" do
 	else
 		pp doc
 		last_doc = doc[0]
-		last_time = last_doc["time"]
+		last_time = Time.at(last_doc["time"])
 	end
 
 	pp last_time
@@ -219,7 +256,7 @@ get "/store/changes/aggregate" do
 	data.each { |entry| id = cscColl.insert(entry) }
 	pp data.size 
 
-	last_access_data = {"_id" => "last_cs_access", "time" => now}
+	last_access_data = {"_id" => "last_cs_access", "time" => now.to_i}
 	if last_doc.nil?
 		cscColl.insert(last_access_data)
 	else
@@ -229,4 +266,8 @@ get "/store/changes/aggregate" do
 	status 200
 	body ''
 end
+
+# ***************************************************
+# * clusters
+# ***************************************************
 
